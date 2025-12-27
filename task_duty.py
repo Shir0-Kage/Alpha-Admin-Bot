@@ -1,0 +1,4 @@
+import gsheet_db_func
+
+gsheet_db_func.update_db_from_gsheet_duty()
+gsheet_db_func.update_db_from_gsheet_trooper_duty()
