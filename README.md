@@ -62,7 +62,7 @@ Originally built for one company, now configurable so any unit can run it.
 6. Run the bot:
 
    ```
-   python task_telebot.py
+   python main.py
    ```
 
 ## Scheduled tasks
@@ -88,13 +88,6 @@ values:
 - `UNIT_ID_HEADER` — prefix for generated soldier ids (e.g. `3SIR19A`)
 - `DB_PATH` — SQLite file location
 
-## Tests
-
-```
-pytest -q
-```
-
-CI runs the suite on every push and pull request (see `.github/workflows/ci.yml`).
 
 ## How it fits together
 
