@@ -1,0 +1,11 @@
+pyTelegramBotAPI>=4.14,<5
+gspread>=6.0,<7
+pytz>=2024.1
+thefuzz>=0.22
+python-dotenv>=1.0
+
+# optional, speeds up thefuzz name matching
+python-Levenshtein>=0.25
+
+# tests
+pytest>=8.0

@@ -1,12 +1,10 @@
 from datetime import datetime, timedelta
 import sqlite3
-import os
-from config import HEADER_FORMAT, DIVIDER, GROUP_FORMAT, SPECIAL_CASE_FORMAT, TROOPER_FORMAT, SUPPORT_STAFF_FORMAT, SERVICE_ACCOUNT, sheet_url
+from config import HEADER_FORMAT, DIVIDER, GROUP_FORMAT, SPECIAL_CASE_FORMAT, TROOPER_FORMAT, SUPPORT_STAFF_FORMAT, SERVICE_ACCOUNT, PARADESTATE_SHEET_URL, DB_PATH
 import pytz
 import utils
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(BASE_DIR, "alpha.db")
+db_path = DB_PATH
 
 def get_total_strength():
     db = sqlite3.connect(db_path)
@@ -562,7 +560,7 @@ def get_status_history(msg):
             raise Exception
     else:
         gc = SERVICE_ACCOUNT
-        sh = gc.open_by_url(sheet_url)
+        sh = gc.open_by_url(PARADESTATE_SHEET_URL)
         worksheet = sh.get_worksheet(0)
         name_list = worksheet.col_values(4)
         soldier_name = name_list[utils.get_name_index(msg, name_list)]

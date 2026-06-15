@@ -1,17 +1,18 @@
-import os
 from telebot import types
 from paradestate_func import get_paradestate, get_status_history
 from telegrambot import bot, CHAT_ID
+from config import validate_config, setup_logging
 import gsheet_db_func
 from utils import get_stayout, get_now, reformat_mass_msg, unlock_db, detect_error, unformat_msg, is_date, NameConflict, DateError
 import excel_through_basics
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import time
 import sqlite3
-import random
 import book_in_str
 import re
+
+setup_logging()
 
 INLINE_MSG = ""
 
@@ -283,348 +284,156 @@ def update_db(message):
     excel_through_basics.update_attendance()
     bot.reply_to(message, "Updated Successfully!")
 
-def result_handler(message, table):
-    msg = message.text
+def _send(message, text):
+    bot.send_message(chat_id=message.chat.id, message_thread_id=message.message_thread_id, text=text)
+
+
+def _name_list_reply(prefix, result, strip=False):
+    reply = prefix
+    for name in result:
+        reply += name + "\n"
+    return reply.strip() if strip else reply
+
+
+def _ms_reply(prefix, result):
+    reply = prefix
+    for row in result:
+        reply += "{} {} {} {}-{}\n".format(row[0], row[1], row[2], row[3], row[4])
+    return reply.strip()
+
+
+# per-table config: the update function, the format hint shown on bad input,
+# the word used in the success line, and how to format the success reply
+UPDATE_TABLES = {
+    "duty": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_duty(msg),
+        "label": "Duty",
+        "hint": "Please Enter the valid format: 4D Date DutyType (Remarks)",
+        "success": lambda r: _name_list_reply("Updated Duty Successfully!", r),
+    },
+    "leave": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_leaves(msg),
+        "label": "Leave",
+        "hint": "Please Enter the valid format: 4D Date Local/Country (Remarks)",
+        "success": lambda r: _name_list_reply("Updated Leave Successfully!", r),
+    },
+    "ma": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_ma(msg),
+        "label": "MA",
+        "hint": "Please Enter the valid format: 4D Date (Remarks)",
+        "success": lambda r: _name_list_reply("Updated MA Successfully!\n", r),
+    },
+    "ms": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_ms(msg),
+        "label": "Status",
+        "hint": "Please Enter the valid format: 4D Date Status (Remarks)",
+        "success": lambda r: _ms_reply("Updated Status Successfully!\n", r),
+    },
+    "course": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_course(msg),
+        "label": "Course",
+        "hint": "Please Enter the valid format: 4D Date CourseName (Remarks)",
+        "success": lambda r: _name_list_reply("Updated Course Successfully!\n", r),
+    },
+    "rsi": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_rs(msg, "RSI"),
+        "label": "RSI",
+        "hint": "Please Enter the valid format: 4D (Remarks)",
+        "success": lambda r: _name_list_reply("Updated RSI Successfully!\n", r, strip=True),
+    },
+    "rso": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_rs(msg, "RSO"),
+        "label": "RSO",
+        "hint": "Please Enter the valid format: 4D (Remarks)",
+        "success": lambda r: _name_list_reply("Updated RSO Successfully!\n", r, strip=True),
+    },
+    "others": {
+        "func": lambda msg: gsheet_db_func.update_gsheet_and_db_others(msg),
+        "label": "Others",
+        "hint": "Please Enter the valid format: 4D InCamp/NotInCamp Date Reason (Remarks)",
+        "success": lambda r: _name_list_reply("Updated Others Successfully!\n", r),
+    },
+}
+
+
+def _handle_name_conflict(message, table, exc):
     markup = types.InlineKeyboardMarkup(row_width=1)
-    update_msg, is_mass_update = parse_update_message(msg)
-    if is_mass_update == True:
-        update_msg = reformat_mass_msg(update_msg)
-    if table == "duty":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_duty(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_duty(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated Duty Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except ValueError:
-            reply_msg = "Please Enter the valid format: 4D Date DutyType (Remarks)"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, "duty")
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = "Please Enter the valid format: 4D Date DutyType (Remarks)"
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
+    original_name, names = exc.args
+    for correct_name in names:
+        markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table, correct_name))))
+    bot.send_message(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text, original_name),
+        reply_markup=markup,
+    )
+
+
+def _handle_update(message, table, update_msg):
+    cfg = UPDATE_TABLES[table]
+    try:
+        result = cfg["func"](update_msg)
+    except sqlite3.OperationalError:
+        unlock_db()
+        cfg["func"](update_msg)
+        _send(message, "Updated {} Successfully!".format(cfg["label"]))
+    except sqlite3.IntegrityError:
+        _send(message, "This record already exist.")
+        unlock_db()
+    except gsheet_db_func.NotFound:
+        _send(message, "Cannot find 4D/Name.")
+        unlock_db()
+    except gsheet_db_func.NoDetail:
+        _send(message, "Status not inputed/Wrong Format.")
+    except NameConflict as e:
+        _handle_name_conflict(message, table, e)
+    except DateError:
+        _send(message, "Please Enter the Date Correctly")
+    except ValueError:
+        _send(message, cfg["hint"])
+    except Exception:
+        error = None
+        for msg_dict in unformat_msg(update_msg, table):
+            error = detect_error(msg_dict)
+        if error:
+            _send(message, cfg["hint"])
+            _send(message, error)
         else:
-            reply_msg = "Updated Duty Successfully!"
-            for name in result:
-                reply_msg += name + "\n"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-    elif table == "leave":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_leaves(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_leaves(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated Leave Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = "Please Enter the valid format: 4D Date Local/Country (Remarks)"
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated Leave Successfully!"
-            for name in result:
-                reply_msg += name + "\n"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-    elif table == "ma":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_ma(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_ma(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated MA Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = "Please Enter the valid format: 4D Date (Remarks)"
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated MA Successfully!\n"
-            for name in result:
-                reply_msg += name + "\n"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-    elif table == "ms":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_ms(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_ms(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated Status Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except gsheet_db_func.NoDetail:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Status not inputed/Wrong Format.")
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = "Please Enter the valid format: 4D Date Status (Remarks)"
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated Status Successfully!\n"
-            for row in result:
-                soldier_name = row[0]
-                num_days = row[1]
-                status = row[2]
-                date_from = row[3]
-                date_to = row[4]
-                reply_msg += "{} {} {} {}-{}\n".format(soldier_name,num_days,status,date_from,date_to)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg.strip())
-    elif table == "course":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_course(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_course(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated Course Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = "Please Enter the valid format: 4D Date CourseName (Remarks)"
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated Course Successfully!\n"
-            for name in result:
-                reply_msg += name + "\n"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-    elif table == "rsi":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_rs(update_msg,"RSI")
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_rs(update_msg,"RSI")
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated RSI Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text= "This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text= "Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = """Please Enter the valid format: 4D (Remarks)"""
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated RSI Successfully!\n"
-            for soldier_name in result:
-                reply_msg += "{}\n".format(soldier_name)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg.strip())
-    elif table == "rso":
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_rs(update_msg,"RSO")
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_rs(update_msg,"RSO")
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated RSO Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = """Please Enter the valid format: 4D (Remarks)"""
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated RSO Successfully!\n"
-            for soldier_name in result:
-                reply_msg += "{}\n".format(soldier_name)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg.strip())
-    elif table == "ord":
-        try:
-            names = gsheet_db_func.ord_check_names(update_msg)
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Name Not Found')
-        else:
-            markup.add(types.InlineKeyboardButton("YES", callback_data="/,/".join(("CONFRIM_ORD","Y"))))
-            markup.add(types.InlineKeyboardButton("Cancel Last", callback_data="/,/".join(("CONFRIM_ORD","N"))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Are you sure you want to ORD the following:\n{}'.format("\n".join(names)), reply_markup=markup)
+            _send(message, "uh oh seems like the code fked up again bozo 🦧")
+            _send(message, "I give u 5 mins to fix ur code")
+        unlock_db()
     else:
-        try:
-            result = gsheet_db_func.update_gsheet_and_db_others(update_msg)
-        except sqlite3.OperationalError:
-            unlock_db()
-            gsheet_db_func.update_gsheet_and_db_others(update_msg)
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Updated Others Successfully!")
-        except sqlite3.IntegrityError:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="This record already exist.")
-            unlock_db()
-        except gsheet_db_func.NotFound:
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="Cannot find 4D/Name.")
-            unlock_db()
-        except NameConflict as e:
-            original_name, names = e.args
-            for correct_name in names:
-                markup.add(types.InlineKeyboardButton(correct_name, callback_data="/,/".join((table,correct_name))))
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text='Error updating: \n"{}"\nConflicting name: "{}", please choose the correct one.'.format(message.text,original_name), reply_markup=markup)
-        except DateError:
-            reply_msg = "Please Enter the Date Correctly"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-        except:
-            error = None
-            msg_lst = unformat_msg(update_msg, table)
-            for msg_dict in msg_lst:
-                error = detect_error(msg_dict)
-            if error:
-                reply_msg = """Please Enter the valid format: 4D InCamp/NotInCamp Date Reason (Remarks)"""
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=error)
-            else:
-                bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="uh oh seems like the code fked up again bozo 🦧")
-                msg = bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="I give u 5 mins to fix ur code")
-            unlock_db()
-        else:
-            reply_msg = "Updated Others Successfully!\n"
-            for name in result:
-                reply_msg += name + "\n"
-            bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text=reply_msg)
+        _send(message, cfg["success"](result))
+
+
+def _handle_ord(message, update_msg):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    try:
+        names = gsheet_db_func.ord_check_names(update_msg)
+    except NameConflict as e:
+        _handle_name_conflict(message, "ord", e)
+    except Exception:
+        _send(message, "Name Not Found")
+    else:
+        markup.add(types.InlineKeyboardButton("YES", callback_data="/,/".join(("CONFRIM_ORD", "Y"))))
+        markup.add(types.InlineKeyboardButton("Cancel Last", callback_data="/,/".join(("CONFRIM_ORD", "N"))))
+        bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Are you sure you want to ORD the following:\n{}".format("\n".join(names)),
+            reply_markup=markup,
+        )
+
+
+def result_handler(message, table):
+    update_msg, is_mass_update = parse_update_message(message.text)
+    if is_mass_update:
+        update_msg = reformat_mass_msg(update_msg)
+    if table == "ord":
+        _handle_ord(message, update_msg)
+    else:
+        _handle_update(message, table, update_msg)
+
 
 @bot.callback_query_handler(func=lambda call:True)
 def update_handler(callback):
@@ -737,63 +546,14 @@ def parse_update_message(message):
         return parse_updates(msg_list), False
 
 @bot.message_handler(func=lambda msg:True)
-def reply_compliments(message):
-    tz = pytz.timezone('Asia/Singapore')
-    now = datetime.now(tz)
+def handle_update_message(message):
+    # catch-all: route status/duty/leave/etc update messages to the right table
     msg = message.text
     check = update_message_check(msg)
     if check:
         result_handler(message, check)
-        return
-    if "unslay" in msg.lower():
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(BASE_DIR, "static/images")
-        slays = ["zackslaying.gif", "zackslaying1.gif", "zackslaying2.gif", "zackslaying3.gif"]
-        slay_file_path = os.path.join(file_path, random.choice(slays))
-        zack_slay_animation = open(slay_file_path,"rb")
-        bot.reply_to(message, "no zackaria you must slay")
-        bot.send_document(chat_id=message.chat.id,message_thread_id=message.message_thread_id,document=zack_slay_animation)
-    elif "slay" in msg.lower():
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(BASE_DIR, "static/images")
-        slays = ["zackslaying.gif", "zackslaying1.gif", "zackslaying2.gif", "zackslaying3.gif"]
-        slay_file_path = os.path.join(file_path, random.choice(slays))
-        zack_slay_animation = open(slay_file_path,"rb")
-        bot.reply_to(message, "yes zackaria slayy 💅")
-        bot.send_document(chat_id=message.chat.id,message_thread_id=message.message_thread_id,document=zack_slay_animation)
-    elif "poggers" in msg.lower():
-        bot.reply_to(message, "holy fking poggers the code works man")
-    elif "good bot" in msg.lower():
-        bot.reply_to(message, "thx, of course everything is working as intended, surely nothing breaks")
-    elif "bad bot" in msg.lower():
-        bot.reply_to(message, "noted.")
-        user = message.from_user
-        username = user.username
-        full_name = user.full_name
-        today = now.strftime("%d/%m/%y")
-        now += timedelta(hours=2)
-        time_now = now.strftime("%H%M")
-        reply_msg = "Convict Code Name: {}, Full Name: {}\nTime of arrest: {} {} IP Address: xxx.xxx.xxx"
-        bot.reply_to(message, reply_msg.format(username,full_name.capitalize(),time_now,today))
-    elif "watch this" in msg.lower():
-        bot.reply_to(message, "im watching")
-    elif "cow" in msg.lower():
-        bot.reply_to(message, "J🐮: mooooo~")
-        cow_gifs = ["NEW_COW.gif"]
-        gif = random.choice(cow_gifs)
-        if gif[:5] != "https":
-            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(BASE_DIR, "static/images")
-            gif_path = os.path.join(file_path, gif)
-            gif = open(gif_path, "rb")
-        bot.send_document(chat_id=message.chat.id,message_thread_id=message.message_thread_id,document=gif)
-    #elif "scary" in msg.lower():
-        #bot.reply_to(message, "im not scary im just artificial bits of data on the internet")
-        #time.sleep(3)
-        #bot.send_message(chat_id=message.chat.id,message_thread_id=message.message_thread_id,text="as artificial as the end date to justin's bulking season")
-    #elif "thats crazy" in msg.lower():
-        #bot.reply_to(message, "its not crazy bruh its the nav-")
-        #bot.send_animation(chat_id=message.chat.id,message_thread_id=message.message_thread_id,animation="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMGdpZHdqMGQxeXB6MmhsZWRiZWhwMGtiY3Q1a3d3amZkcXdpbGR4eCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/jQcTvFdi1DUSclonUc/giphy.gif")
+
 
 if __name__ == "__main__":
+    validate_config()
     bot.infinity_polling()

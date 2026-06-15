@@ -1,0 +1,49 @@
+# secrets / local config
+.env
+service_account.json
+*service_account*.json
+credentials.json
+*.token
+
+# database (has personnel data)
+alpha.db
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# venv
+.venv/
+venv/
+env/
+ENV/
+
+# editor / os
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+logs/
+
+# tests (kept local)
+tests/

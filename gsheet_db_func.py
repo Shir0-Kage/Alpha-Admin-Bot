@@ -1,11 +1,20 @@
 from datetime import datetime, timedelta
 import sqlite3
-import os
+import logging
 from gspread.cell import Cell
 from gspread.utils import rowcol_to_a1
-from config import SERVICE_ACCOUNT, sheet_url
+from config import (
+    SERVICE_ACCOUNT,
+    PARADESTATE_SHEET_URL,
+    COMMANDER_DUTY_SHEET_URL,
+    TROOPER_DUTY_SHEET_URL,
+    UNIT_ID_HEADER,
+    DB_PATH,
+)
 import utils
 import pytz
+
+log = logging.getLogger(__name__)
 
 class NotFound(Exception):
     pass
@@ -13,8 +22,7 @@ class NotFound(Exception):
 class NoDetail(Exception):
     pass
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(BASE_DIR, "alpha.db")
+db_path = DB_PATH
 
 
 def update_stayout_am():
@@ -112,7 +120,7 @@ def update_rso(worksheet,date_param):
 def update_attendance_am(date):
     db = sqlite3.connect(db_path)
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     update_stayout_am()
     update_permanent(worksheet,date)
@@ -165,7 +173,7 @@ def update_attendance_am(date):
 def update_recruits_attendance_am(date):
     db = sqlite3.connect(db_path)
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     update_stayout_am()
     update_permanent(worksheet,date)
@@ -204,7 +212,7 @@ def update_recruits_attendance_am(date):
 def update_attendance_pm(date):
     db = sqlite3.connect(db_path)
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
 
     A1col, col = utils.get_today_col(worksheet,date)
@@ -265,7 +273,7 @@ def update_attendance_pm(date):
 # def update_recruits_attendance_pm(date):
 #     db = sqlite3.connect(db_path)
 #     gc = SERVICE_ACCOUNT
-#     sh = gc.open_by_url(sheet_url)
+#     sh = gc.open_by_url(PARADESTATE_SHEET_URL)
 #     worksheet = sh.get_worksheet(0)
 
 #     A1col, col = utils.get_today_col(worksheet,date)
@@ -329,7 +337,7 @@ def update_db_info_from_gsheet():
     today = utils.get_now().strftime("%y%m%d")
     db = sqlite3.connect(db_path)
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     records = worksheet.get_all_values()[3:]
 
@@ -403,7 +411,7 @@ def update_db_info(soldier_info,current_soldier_id_list):
         grp = soldier_info[6]
         stayout = str(soldier_info[7] == "Yes")
         if soldier_id == "":
-            soldier_id = utils.generate_soldierID("3SIR19A",name,current_soldier_id_list)
+            soldier_id = utils.generate_soldierID(UNIT_ID_HEADER,name,current_soldier_id_list)
             current_soldier_id_list.append(soldier_id)
             new_soldier_id = soldier_id
         db.execute(query, (soldier_id,rank,name,plt,sct,grp,stayout))
@@ -431,9 +439,9 @@ def update_db_info(soldier_info,current_soldier_id_list):
 
 def update_db_from_gsheet_duty():
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(COMMANDER_DUTY_SHEET_URL)
     worksheets = sh.worksheets()
-    paradestate_sh = gc.open_by_url("sheet_url?usp=sharing")
+    paradestate_sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     paradestate_worksheet = paradestate_sh.get_worksheet(0)
     # clear_duty()
     for worksheet in worksheets:
@@ -489,8 +497,9 @@ def insert_db_duty(data, worksheet):
     for row in data:
         try:
             db.execute(insert_query, row)
-        except:
-            pass
+        except sqlite3.Error as exc:
+            # usually a duplicate, skip it
+            log.debug("skipped insert %s: %s", row, exc)
         date = row[1]
         converted_date = utils.convert_date_ymd_db(date)
         soldier_row = utils.get_index(row[0], id_list) + 1
@@ -504,7 +513,7 @@ def insert_db_duty(data, worksheet):
 
 def update_db_from_gsheet_trooper_duty():
     gc = SERVICE_ACCOUNT
-    gd_sh = gc.open_by_url(sheet_url)
+    gd_sh = gc.open_by_url(TROOPER_DUTY_SHEET_URL)
     worksheet_title = utils.get_now().strftime("%b %y").capitalize()
     gd_worksheet = gd_sh.worksheet(worksheet_title)
     insert_data = get_trooper_duty(gd_worksheet)
@@ -538,9 +547,9 @@ def get_trooper_duty(worksheet):
 
 def update_db_from_gsheet_leave_off():
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(COMMANDER_DUTY_SHEET_URL)
     worksheets = sh.worksheets()
-    paradestate_sh = gc.open_by_url("sheet_url?usp=sharing")
+    paradestate_sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     paradestate_worksheet = paradestate_sh.get_worksheet(0)
     for worksheet in worksheets:
         insert_data = get_leave_off(worksheet)
@@ -598,8 +607,9 @@ def insert_db_leave_off(data, worksheet):
     for row in data:
         try:
             db.execute(insert_query, row)
-        except:
-            pass
+        except sqlite3.Error as exc:
+            # usually a duplicate, skip it
+            log.debug("skipped insert %s: %s", row, exc)
         country = row[1]
         date_from = row[2]
         date_to = row[3]
@@ -644,7 +654,7 @@ def update_gsheet_and_db_duty(msg):
     E.G.: 3SG MATHIS 261223-281223 MC
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
 
@@ -709,8 +719,9 @@ def update_gsheet_and_db_duty(msg):
             try:
                 db.execute(query, (soldier_id,utils.convert_date_dmy_ymd(date),dutyType,remarks))
                 result_msg.append(soldier_name)
-            except:
-                pass
+            except sqlite3.Error as exc:
+                # usually a duplicate, skip it
+                log.debug("skipped duty insert for %s: %s", soldier_name, exc)
     db.commit()
     db.close()
     worksheet.batch_update(to_batch_update)
@@ -726,7 +737,7 @@ def update_gsheet_and_db_leaves(msg):
     E.G.: 3SG MATHIS 261223-281223 LOCAL
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
     # db.execute("DELETE FROM Leave")
@@ -859,7 +870,7 @@ def update_gsheet_and_db_ma(msg):
     E.G.: 3SG MATHIS 261223-281223 MC
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
     # db.execute("DELETE FROM Duty")
@@ -954,7 +965,7 @@ def update_gsheet_and_db_ms(msg):
     E.G.: 3SG MATHIS 261223-281223 MC
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
     # db.execute("DELETE FROM MedicalStatus")
@@ -1147,7 +1158,7 @@ def update_gsheet_and_db_course(msg):
     E.G.: 3SG MATHIS 261223-281223 BVOC
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
 
@@ -1296,7 +1307,7 @@ def update_gsheet_and_db_others(msg):
     E.G.: 3SG MATHIS NotInCamp/InCamp 150124-160124 RSO REMARKS: xxxx
     """
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
 
@@ -1418,7 +1429,7 @@ def update_gsheet_and_db_others(msg):
 
 def update_gsheet_and_db_rs(msg,location):
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
 
@@ -1479,7 +1490,7 @@ def update_gsheet_and_db_rs(msg,location):
 
 def update_stayout(msg):
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     db = sqlite3.connect(db_path)
 
@@ -1522,7 +1533,7 @@ def generate_nominal_roll():
 
 def add_days_gsheet(day_to_add):
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     date_row = 2
     day_row = 1
@@ -1549,7 +1560,7 @@ def add_days_gsheet(day_to_add):
 
 def ord_check_names(msg):
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     name_list = worksheet.col_values(4)
     result_list = []
@@ -1566,7 +1577,7 @@ def ord_check_names(msg):
 
 def ord_confirm_delete_record(names):
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url("sheet_url?usp=sharing")
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     name_list = worksheet.col_values(4)
     rank_list = worksheet.col_values(3)

@@ -1,12 +1,10 @@
 import sqlite3
-import os
-from config import SERVICE_ACCOUNT, sheet_url
+from config import SERVICE_ACCOUNT, PARADESTATE_SHEET_URL, DB_PATH
 import utils
 from datetime import timedelta
 from gspread import Cell
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(BASE_DIR, "alpha.db")
+db_path = DB_PATH
 
 def is4D(check):
     if len(str(check)) == 4 and check.isdigit():
@@ -25,11 +23,10 @@ def get_repeated(check):
 def updateRation():
     db = sqlite3.connect(db_path)
     gc = SERVICE_ACCOUNT
-    sh = gc.open_by_url(sheet_url)
+    sh = gc.open_by_url(PARADESTATE_SHEET_URL)
     worksheet = sh.get_worksheet(0)
     ration_type = worksheet.col_values(9)
     id_list = worksheet.col_values(2)
-    print(id_list)
     query = "DELETE FROM RationType"
     db.execute(query)
     # To update when new soldierID is added

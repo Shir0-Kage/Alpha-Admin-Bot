@@ -1,86 +1,138 @@
-# Alpha Coy Admin Bot
+# Admin Bot
 
-A centralised database to track Attendance and Statuses, with methods to generate Parade States and Book In/Book Out Strength.
+A Telegram bot for tracking company attendance and statuses. It keeps a SQLite
+database in sync with Google Sheets and generates parade states, book-in/book-out
+strength reports, and status histories on demand.
 
-#
+Originally built for one company, now configurable so any unit can run it.
 
-# Operating Guide For Future Batches
+## What you need
 
-## Task TeleBot
-This file hosts the telegram handlers and enable updates and request to the database. Commands are used to generate Parade State and BIBO Strength while messages with specific headers are used to update statuses.
+- Python 3.11+
+- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
+- A Google Cloud service account with the Sheets API enabled
+- Three Google Sheets (or one, if you keep everything in a single spreadsheet):
+  paradestate, commander duty, trooper duty
 
-```python
-# telegram api to handle commands and reply to messages
-# note: commands are case sensitive so different variations can be included for those with spelling disability
-@bot.message_handler(commands=[""])
-def foo(message):
-    bot.reply_to(message, "Hello World")
+## Setup
 
-# telegram api to handle any message
-@bot.message_handler(func=lambda msg:True)
-def foo(message):
-    bot.reply_to(message, "Hello World")
+1. Install dependencies:
 
-# telegram api to register a subsequent handler i.e. await another message after replying to the command
-@bot.message_handler(commands=[""])
-def foo(message):
-    sent_msg = bot.reply_to(message, "Please enter a number from 1-10")
-    bot.register_next_step_handler(sent_msg, next_handler)
+   ```
+   python -m venv .venv
+   .venv/Scripts/activate          # Windows
+   source .venv/bin/activate       # Linux/Mac
+   pip install -r requirements.txt
+   ```
 
-def next_handler(message):
-    # message refers to the reply from another user after the bot's prompt
-    if message.text == "7":
-        bot.reply_to(message, "Jackpot!")
-    else:
-        bot.reply_to(message, "L Bozo")
+2. Get Google credentials:
+   - In the [Google Cloud Console](https://console.cloud.google.com/), create a
+     project, enable the **Google Sheets API** and **Google Drive API**, and
+     create a **service account**. Download its JSON key as `service_account.json`
+     in the project root.
+   - Share each spreadsheet with the service account's email (found in the JSON).
+
+3. Configure:
+
+   ```
+   cp .env.example .env
+   ```
+
+   Then fill in `.env` with your bot token, chat ids, sheet urls and service
+   account path. See the comments in `.env.example` for each value.
+
+4. Create the database:
+
+   ```
+   python init_db.py --seed-groups
+   ```
+
+   Edit `seed_groups.sql` first if your unit's platoon/section structure differs
+   from the example.
+
+5. (Optional) Generate fresh Google Sheets templates:
+
+   ```
+   python init_sheets.py --share you@gmail.com
+   ```
+
+   This creates the three spreadsheets with the right headers and prints their
+   urls to paste into `.env`.
+
+6. Run the bot:
+
+   ```
+   python task_telebot.py
+   ```
+
+## Scheduled tasks
+
+These are meant to be run on a schedule (cron, Task Scheduler, etc):
+
+| Script           | When                | What it does                                   |
+|------------------|---------------------|------------------------------------------------|
+| `task_duty.py`   | start of each day   | pull duties from the duty sheets into the db   |
+| `task_fp.py`     | first parade        | update AM attendance, send parade state        |
+| `task_lp.py`     | last parade         | update PM attendance, send parade state        |
+| `task_dailys.py` | a few times a day   | send movement-day reminders                    |
+
+## Configuration
+
+Everything sensitive or unit-specific lives in `.env` (never committed). Key
+values:
+
+- `BOT_TOKEN` — Telegram bot token
+- `CHAT_CONFIG` — JSON mapping chat names to chat/topic ids
+- `GOOGLE_SERVICE_ACCOUNT_FILE` — path to the credentials JSON
+- `PARADESTATE_SHEET_URL`, `COMMANDER_DUTY_SHEET_URL`, `TROOPER_DUTY_SHEET_URL`
+- `UNIT_ID_HEADER` — prefix for generated soldier ids (e.g. `3SIR19A`)
+- `DB_PATH` — SQLite file location
+
+## Tests
+
 ```
-Inline Keyboards and other form of markups can also be explored in the future.
+pytest -q
+```
 
-## Paradestate Func
-Self explanatory, this file generates parade state messages in the specific format HQ requires using data from the database only. No updates are done in this file and functions are request only.
+CI runs the suite on every push and pull request (see `.github/workflows/ci.yml`).
 
-## G-Sheet DB Func
-Clearly someone didn't have a good naming sense when creating this file. The function names are even more horrendous but they are prehistoric artifacts so let it slide. 
-#### Here contains all the backend processing of the bot, and is the connection between the bot, the database, and the google sheet (now the name makes sense). 
+## How it fits together
 
-### Update Attendance
-- Attendance is updated on the database side before the parade state is generated. 
-- Data from the google sheet is used to update the database before the parade state is generated. 
-- Data updated varies between am and pm as first and last parade has different considerations:
-     - Last Parade strength do not include the stay outs
-     - on book out days everyone is absent except those on duty. 
-- Logic in this function may not cover every single scenario so **If there is a logic error high chance it is because of this function.**
+- **task_telebot.py** — Telegram command and message handlers. Commands generate
+  parade states / strength reports; messages with a header (`STATUS:`, `DUTY:`,
+  `LEAVE:`, `MA:`, `COURSE:`, `OTHERS:`, `RSI:`, `RSO:`, `ORD`) update records.
+- **gsheet_db_func.py** — the backend between the bot, the database, and the
+  sheets. Attendance updates, sheet/db sync, and all the record writers live here.
+  Most logic bugs, if any, will be in the attendance functions.
+- **paradestate_func.py** — builds parade state messages from the database only.
+- **book_in_str.py** — builds book-in/book-out strength. Absentees come from
+  `get_absent()`.
+- **utils.py** — date conversions, message parsing, fuzzy name matching, id
+  generation.
+- **config.py** — settings (from `.env`) and message format templates.
+- **excel_through_basics.py** — recruit attendance and ration helpers.
 
-### Update Info
-- New Soldier Information (Platoon, Names, Rank etc.), entirely new soldiers, or soldiers who are removed can be updated using this function. 
-- A new ID is generated for new soldiers depending on their name, with increments for repeating similar names. 
-- **ALL SOLDIER'S PAST RECORDS AND STATUSES WILL BE DELETED WITH THIS FUNCTION**. Do make backups or double check before deleting people using this function. 
+### Updating attendance (gsheet_db_func)
 
-### Update Duty
-- Duties are updated automatically at the start of each day. 
-- They are sourced from the Overall Duties sheet for commanders, and the Trooper Duties sheet for troopers. 
-- **It is format dependent so do change the code to follow the format i.e. date formats, rows and columns added/removed etc.** 
+- Attendance is updated in the database before a parade state is generated, using
+  data from the sheet.
+- AM and PM differ: last parade excludes stay-outs, and on book-out days everyone
+  is absent except those on duty.
 
-### Update Leave
-- Leaves are updated 3 days in advance from the Overall Duties sheet. For commanders only.
+### Updating soldier info
 
-### Update G-Sheet And DB...
-- The main functions to update google sheet and database. 
-- Message is unformatted and details are inserted into google sheet if it affects attendance, and inserted into database regardless. 
-- Google sheet is used as a reference to update attendance, Database is used as a way to quickly get the duration of a person's status/leave/appointment etc.
+- `update_db_info_from_gsheet` adds/updates/removes soldiers based on the sheet.
+  A new id is generated from the name with an increment for duplicates.
+- **Removing a soldier deletes their records.** Back up first.
 
-### Add Days G-Sheet
-- Add more columns to the google sheet automatically. 
-- The first tab is the default worksheet to get and update attendance so do change worksheets and archive old worksheets once in awhile to reduce lag.
+### Updating duties / leave
 
-## Book In Str
-This file generates the book in strength. Absentees are generated from functions in this file so if there is any missing absentees (Leave or MC), debug the code in the get_absent() function.
+- Duties are pulled daily from the commander and trooper duty sheets. The format
+  matters — dates, rows and columns are read by position, so update the code if
+  your sheet layout changes.
+- Leave is read a few days in advance from the commander sheet.
 
-## Utils
-This file contains all the utility functions. Functions to unformat messages, detect errors, format and unformat dates
+## Adding days to the sheet
 
-## Config
-This file contains the formats of all the Parade State, BIBO Strength messages.
-
-## Task Duty / FP /LP
-This files are ran daily and calls the functions to update Duty, Attendance and send Parade State to the chat daily at a fixed timing.
+`add_days_gsheet` (via the `/add_days` command) appends date columns to the
+paradestate sheet. Archive old sheets periodically to keep things fast.

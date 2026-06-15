@@ -1,12 +1,10 @@
 from datetime import datetime, timedelta
 import sqlite3
-import os
 import pytz
 import utils
-from config import BOOK_IN_STR_HEADER, BOOK_IN_STR_GROUP, BOOK_IN_STR_GROUP_TROOPER, BOOK_IN_STR_GROUP_STAFF
+from config import BOOK_IN_STR_HEADER, BOOK_IN_STR_GROUP, BOOK_IN_STR_GROUP_TROOPER, BOOK_IN_STR_GROUP_STAFF, DB_PATH
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(BASE_DIR, "alpha.db")
+db_path = DB_PATH
 
 def format_date(date):
     try:

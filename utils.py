@@ -1,12 +1,11 @@
 from datetime import datetime, timedelta
 import pytz
 import sqlite3
-import os
 import re
 from thefuzz import process
+from config import DB_PATH
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(BASE_DIR, "alpha.db")
+db_path = DB_PATH
 
 class NameConflict(Exception):
     pass
@@ -187,14 +186,9 @@ def is_detail(check:str, table):
     return False
 
 def check_others_incamp(msg_str):
+    # check the "not" variants first, otherwise "not in camp" matches "in camp"
     incamp = None
-    if re.match(r'^.*incamp.*', msg_str, flags=re.IGNORECASE):
-        msg_str = re.sub(r'^.*incamp.*', "", msg_str, flags=re.IGNORECASE)
-        incamp = True
-    elif re.match(r'^.*in camp.*', msg_str, flags=re.IGNORECASE):
-        msg_str = re.sub(r'^.*in camp.*', "", msg_str, flags=re.IGNORECASE)
-        incamp = True
-    elif re.match(r'^.*notincamp.*', msg_str, flags=re.IGNORECASE):
+    if re.match(r'^.*notincamp.*', msg_str, flags=re.IGNORECASE):
         msg_str = re.sub(r'^.*notincamp.*', "", msg_str, flags=re.IGNORECASE)
         incamp = False
     elif re.match(r'^.*not incamp.*', msg_str, flags=re.IGNORECASE):
@@ -203,6 +197,12 @@ def check_others_incamp(msg_str):
     elif re.match(r'^.*not in camp.*', msg_str, flags=re.IGNORECASE):
         msg_str = re.sub(r'^.*not in camp.*', "", msg_str, flags=re.IGNORECASE)
         incamp = False
+    elif re.match(r'^.*incamp.*', msg_str, flags=re.IGNORECASE):
+        msg_str = re.sub(r'^.*incamp.*', "", msg_str, flags=re.IGNORECASE)
+        incamp = True
+    elif re.match(r'^.*in camp.*', msg_str, flags=re.IGNORECASE):
+        msg_str = re.sub(r'^.*in camp.*', "", msg_str, flags=re.IGNORECASE)
+        incamp = True
     return msg_str, incamp
 
 def dict_lst_append(dict_lst:dict, key, item):
@@ -552,5 +552,3 @@ def generate_soldierID(header, name, current_soldierID_list):
     increment = [i for i in current_soldierID_list if formatted_name in i]
     count = len(increment) + 1
     return soldier_ID.format(header=header,name=formatted_name,incre=f'{count:02}')
-
-print(unformat_msg(["PARRIS 2D MC (FEVER & DIARRHOEA)"], "ms"))
